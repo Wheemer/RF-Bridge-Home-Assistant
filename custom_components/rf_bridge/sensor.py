@@ -13,7 +13,7 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import SOURCE_INTEGRATION_DISCOVERY, ConfigEntry
 from homeassistant.const import (
     DEGREE,
     STATE_UNAVAILABLE,
@@ -27,8 +27,21 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from . import RFBridgeHub, diagnostics_signal, parse_rflink_message, rf_event_signal
-from .const import CONF_SENSOR_DISCOVERY, DOMAIN
+from . import (
+    RFBridgeHub,
+    diagnostics_signal,
+    is_sensor_entry,
+    parse_rflink_message,
+    rf_event_signal,
+)
+from .const import (
+    CONF_PARENT_ENTRY_ID,
+    CONF_PROTOCOL,
+    CONF_SENSOR_DISCOVERY,
+    CONF_SENSOR_IDENTIFIER,
+    CONF_SENSOR_MEASUREMENTS,
+    DOMAIN,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -223,20 +236,49 @@ class RFBridgeDiscoveredSensor(RestoreSensor):
     _attr_has_entity_name = True
     _attr_should_poll = False
 
-    def __init__(self, hub: RFBridgeHub, protocol: str, identifier: str, description: RFBridgeMeasurementDescription, value: str | float | None = None) -> None:
+    def __init__(
+        self,
+        hub: RFBridgeHub,
+        entry: ConfigEntry,
+        protocol: str,
+        identifier: str,
+        description: RFBridgeMeasurementDescription,
+        value: str | float | None = None,
+        create_device: bool = True,
+    ) -> None:
         self._hub = hub
         self._description = description
         self._value = value
-        self._attr_unique_id = _sensor_identity(hub.entry.entry_id, protocol, identifier, description.key)
-        self._attr_name = f"{protocol} {identifier} {description.name}"
+        self._attr_unique_id = _sensor_identity(
+            entry.entry_id, protocol, identifier, description.key
+        )
+        self._attr_name = description.name
         self._attr_icon = description.icon
         self._attr_device_class = description.device_class
         self._attr_native_unit_of_measurement = description.native_unit_of_measurement
         self._attr_state_class = description.state_class
+        if create_device:
+            self._attr_device_info = {
+                "identifiers": {
+                    (
+                        DOMAIN,
+                        f"{entry.entry_id}_{protocol.lower()}_{identifier.lower()}",
+                    )
+                },
+                "name": f"{protocol} {identifier}",
+                "manufacturer": "433 MHz",
+                "model": protocol,
+            }
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self.async_on_remove(async_dispatcher_connect(self.hass, diagnostics_signal(self._hub.entry.entry_id), self.async_write_ha_state))
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                diagnostics_signal(self._hub.entry.entry_id),
+                self.async_write_ha_state,
+            )
+        )
         if self._value is not None:
             return
         state = await self.async_get_last_state()
@@ -246,10 +288,6 @@ class RFBridgeDiscoveredSensor(RestoreSensor):
     @property
     def available(self) -> bool:
         return self._hub.available
-
-    @property
-    def device_info(self) -> dict[str, object]:
-        return self._hub.device_info
 
     @property
     def native_value(self) -> str | int | float | None:
@@ -262,29 +300,84 @@ class RFBridgeDiscoveredSensor(RestoreSensor):
         self.async_write_ha_state()
 
 
-class RFBridgeDiscoveredSensorManager:
-    """Create and update normal sensor entities from decoded RFLink frames."""
+class RFBridgeLegacySensorManager:
+    """Keep pre-discovery sensor entities updating without creating new ones."""
 
-    def __init__(self, hass: HomeAssistant, hub: RFBridgeHub, async_add_entities: AddEntitiesCallback) -> None:
-        self._hass = hass
+    def __init__(self, hass: HomeAssistant, hub: RFBridgeHub) -> None:
         self._hub = hub
-        self._async_add_entities = async_add_entities
-        self._sensors: dict[str, RFBridgeDiscoveredSensor] = {}
-
-    def restore(self) -> list[RFBridgeDiscoveredSensor]:
-        registry = er.async_get(self._hass)
-        restored: list[RFBridgeDiscoveredSensor] = []
-        for entity_entry in er.async_entries_for_config_entry(registry, self._hub.entry.entry_id):
+        self._sensors: dict[tuple[str, str, str], RFBridgeDiscoveredSensor] = {}
+        registry = er.async_get(hass)
+        for entity_entry in er.async_entries_for_config_entry(
+            registry, hub.entry.entry_id
+        ):
             if entity_entry.domain != "sensor":
                 continue
-            identity = _decode_sensor_identity(self._hub.entry.entry_id, entity_entry.unique_id)
+            identity = _decode_sensor_identity(
+                hub.entry.entry_id, entity_entry.unique_id
+            )
             if identity is None:
                 continue
             protocol, identifier, measurement_key = identity
-            sensor = RFBridgeDiscoveredSensor(self._hub, protocol, identifier, MEASUREMENTS_BY_KEY[measurement_key])
-            self._sensors[sensor.unique_id] = sensor
-            restored.append(sensor)
-        return restored
+            description = MEASUREMENTS_BY_KEY[measurement_key]
+            self._sensors[identity] = RFBridgeDiscoveredSensor(
+                hub,
+                hub.entry,
+                protocol,
+                identifier,
+                description,
+                create_device=False,
+            )
+
+    @property
+    def identities(self) -> set[tuple[str, str]]:
+        return {(protocol, identifier) for protocol, identifier, _ in self._sensors}
+
+    def create_entities(self) -> list[RFBridgeDiscoveredSensor]:
+        return list(self._sensors.values())
+
+    @callback
+    def handle_event(self, event: dict[str, Any]) -> None:
+        if event.get("raw") is True:
+            return
+        message = event.get("message")
+        if not isinstance(message, str):
+            return
+        data = parse_rflink_message(message)
+        protocol = data.get("protocol")
+        identifier = data.get("id")
+        if not isinstance(protocol, str) or not isinstance(identifier, str):
+            return
+        for (sensor_protocol, sensor_identifier, key), sensor in self._sensors.items():
+            if (sensor_protocol, sensor_identifier) != (protocol, identifier):
+                continue
+            raw_value = data.get(key)
+            if (
+                isinstance(raw_value, str)
+                and (value := _decode_measurement(key, raw_value)) is not None
+            ):
+                sensor.async_set_value(value)
+
+
+class RFBridgePendingSensorDiscoveryManager:
+    """Offer unseen decoded sensors through Home Assistant discovery."""
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        hub: RFBridgeHub,
+        legacy_identities: set[tuple[str, str]],
+    ) -> None:
+        self._hass = hass
+        self._hub = hub
+        self._pending: set[tuple[str, str]] = set()
+        self._accepted = legacy_identities | {
+            (entry.data.get(CONF_PROTOCOL), entry.data.get(CONF_SENSOR_IDENTIFIER))
+            for entry in hass.config_entries.async_entries(DOMAIN)
+            if is_sensor_entry(entry)
+            and entry.data.get(CONF_PARENT_ENTRY_ID) == hub.entry.entry_id
+            and isinstance(entry.data.get(CONF_PROTOCOL), str)
+            and isinstance(entry.data.get(CONF_SENSOR_IDENTIFIER), str)
+        }
 
     @callback
     def handle_event(self, event: dict[str, Any]) -> None:
@@ -300,25 +393,108 @@ class RFBridgeDiscoveredSensorManager:
         identifier = data.get("id")
         if not isinstance(protocol, str) or not isinstance(identifier, str):
             return
-        for field, description in MEASUREMENTS.items():
-            raw_value = data.get(field)
-            if not isinstance(raw_value, str):
-                continue
-            value = _decode_measurement(field, raw_value)
-            if value is None:
-                continue
-            unique_id = _sensor_identity(self._hub.entry.entry_id, protocol, identifier, description.key)
-            sensor = self._sensors.get(unique_id)
-            if sensor is None:
-                sensor = RFBridgeDiscoveredSensor(self._hub, protocol, identifier, description, value)
-                self._sensors[unique_id] = sensor
-                self._async_add_entities([sensor])
-                continue
-            sensor.async_set_value(value)
+        measurement_keys = sorted(
+            key
+            for key in MEASUREMENTS
+            if isinstance(data.get(key), str)
+            and _decode_measurement(key, data[key]) is not None
+        )
+        if not measurement_keys:
+            return
+        sensor_key = (protocol, identifier)
+        if sensor_key in self._accepted or sensor_key in self._pending:
+            return
+        self._pending.add(sensor_key)
+        self._hass.async_create_task(
+            self._hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": SOURCE_INTEGRATION_DISCOVERY},
+                data={
+                    CONF_PARENT_ENTRY_ID: self._hub.entry.entry_id,
+                    CONF_PROTOCOL: protocol,
+                    CONF_SENSOR_IDENTIFIER: identifier,
+                    CONF_SENSOR_MEASUREMENTS: measurement_keys,
+                },
+            )
+        )
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+class RFBridgeAcceptedSensorManager:
+    """Maintain an accepted sensor's entities from the bridge event stream."""
+
+    def __init__(
+        self,
+        hub: RFBridgeHub,
+        entry: ConfigEntry,
+    ) -> None:
+        self._hub = hub
+        self._entry = entry
+        self._protocol = entry.data[CONF_PROTOCOL]
+        self._identifier = entry.data[CONF_SENSOR_IDENTIFIER]
+        self._sensors: dict[str, RFBridgeDiscoveredSensor] = {}
+
+    def create_entities(self) -> list[RFBridgeDiscoveredSensor]:
+        entities = []
+        for key in self._entry.data.get(CONF_SENSOR_MEASUREMENTS, []):
+            description = MEASUREMENTS_BY_KEY.get(key)
+            if description is None:
+                continue
+            sensor = RFBridgeDiscoveredSensor(
+                self._hub, self._entry, self._protocol, self._identifier, description
+            )
+            self._sensors[description.key] = sensor
+            entities.append(sensor)
+        return entities
+
+    @callback
+    def handle_event(self, event: dict[str, Any]) -> None:
+        if event.get("raw") is True:
+            return
+        message = event.get("message")
+        if not isinstance(message, str):
+            return
+        data = parse_rflink_message(message)
+        if data.get("protocol") != self._protocol or data.get("id") != self._identifier:
+            return
+        for key, sensor in self._sensors.items():
+            raw_value = data.get(key)
+            if (
+                isinstance(raw_value, str)
+                and (value := _decode_measurement(key, raw_value)) is not None
+            ):
+                sensor.async_set_value(value)
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+) -> None:
+    if is_sensor_entry(entry):
+        parent_entry_id = entry.data[CONF_PARENT_ENTRY_ID]
+        hub: RFBridgeHub = hass.data[DOMAIN][parent_entry_id]
+        manager = RFBridgeAcceptedSensorManager(hub, entry)
+        async_add_entities(manager.create_entities())
+        entry.async_on_unload(
+            async_dispatcher_connect(
+                hass, rf_event_signal(parent_entry_id), manager.handle_event
+            )
+        )
+        return
+
     hub: RFBridgeHub = hass.data[DOMAIN][entry.entry_id]
-    manager = RFBridgeDiscoveredSensorManager(hass, hub, async_add_entities)
-    async_add_entities([*(RFBridgeSensor(hub, description) for description in SENSORS), *manager.restore()])
-    entry.async_on_unload(async_dispatcher_connect(hass, rf_event_signal(entry.entry_id), manager.handle_event))
+    legacy_manager = RFBridgeLegacySensorManager(hass, hub)
+    discovery_manager = RFBridgePendingSensorDiscoveryManager(
+        hass, hub, legacy_manager.identities
+    )
+    async_add_entities(
+        [RFBridgeSensor(hub, description) for description in SENSORS]
+        + legacy_manager.create_entities()
+    )
+
+    @callback
+    def handle_event(event: dict[str, Any]) -> None:
+        legacy_manager.handle_event(event)
+        discovery_manager.handle_event(event)
+
+    entry.async_on_unload(
+        async_dispatcher_connect(hass, rf_event_signal(entry.entry_id), handle_event)
+    )

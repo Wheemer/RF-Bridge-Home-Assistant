@@ -20,18 +20,42 @@ sensor = SENSOR.read_text(encoding="utf-8")
 config_flow = CONFIG_FLOW.read_text(encoding="utf-8")
 
 for source, label in ((button, "button"), (event, "event")):
-    require(source, "from homeassistant.helpers.dispatcher import async_dispatcher_connect", label)
+    require(
+        source,
+        "from homeassistant.helpers.dispatcher import async_dispatcher_connect",
+        label,
+    )
     require(source, "diagnostics_signal(self._hub.entry.entry_id)", label)
     require(source, "self.async_write_ha_state", label)
 
-require(init, "@callback\n    def _async_publish_initial_diagnostics", "event-loop startup callback")
-require(init, "async_call_later(hass, 0, _async_publish_initial_diagnostics)", "startup state refresh")
-require(sensor, "class RFBridgeDiscoveredSensorManager", "decoded sensor discovery manager")
+require(
+    init,
+    "@callback\n    def _async_publish_initial_diagnostics",
+    "event-loop startup callback",
+)
+require(
+    init,
+    "async_call_later(hass, 0, _async_publish_initial_diagnostics)",
+    "startup state refresh",
+)
+require(
+    sensor,
+    "class RFBridgePendingSensorDiscoveryManager",
+    "decoded sensor discovery manager",
+)
 require(sensor, 'if event.get("raw") is True', "raw event exclusion")
 require(sensor, "er.async_entries_for_config_entry", "sensor registry restore")
-require(sensor, "rf_event_signal(entry.entry_id), manager.handle_event", "decoded event listener")
+require(
+    sensor,
+    "rf_event_signal(entry.entry_id), handle_event",
+    "decoded event listener",
+)
 require(sensor, "CONF_SENSOR_DISCOVERY", "sensor discovery preference")
-require(sensor, "self._hub.entry.options.get(CONF_SENSOR_DISCOVERY, True)", "sensor discovery preference gate")
+require(
+    sensor,
+    "self._hub.entry.options.get(CONF_SENSOR_DISCOVERY, True)",
+    "sensor discovery preference gate",
+)
 
 options_flow = config_flow.split("class RFBridgeOptionsFlow", maxsplit=1)[1]
 require(options_flow, "CONF_SENSOR_DISCOVERY", "sensor discovery option")

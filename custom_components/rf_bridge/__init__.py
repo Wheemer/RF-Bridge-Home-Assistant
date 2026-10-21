@@ -12,7 +12,7 @@ import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse, callback
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -25,15 +25,18 @@ from .const import (
     CONF_COMMAND,
     CONF_COMMAND_KEY,
     CONF_COMMANDS,
+    CONF_ENTRY_TYPE,
     CONF_HOST,
     CONF_HW_VERSION,
     CONF_IDENTIFIERS,
     CONF_KNOWN_COMMANDS,
     CONF_MODEL,
     CONF_NAME,
+    CONF_PARENT_ENTRY_ID,
     CONF_SW_VERSION,
     DEFAULT_API_PORT,
     DOMAIN,
+    ENTRY_TYPE_SENSOR,
     PLATFORMS,
     SERVICE_SEND_NAMED,
     SERVICE_SEND_RAW,
@@ -1068,8 +1071,22 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     return True
 
 
+def is_sensor_entry(entry: ConfigEntry) -> bool:
+    """Return whether this entry represents one accepted RF sensor."""
+    return entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SENSOR
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _async_register_services(hass)
+    if is_sensor_entry(entry):
+        parent_entry_id = entry.data.get(CONF_PARENT_ENTRY_ID)
+        if not isinstance(parent_entry_id, str) or parent_entry_id not in hass.data.get(
+            DOMAIN, {}
+        ):
+            raise ConfigEntryNotReady("RF Bridge parent entry is not loaded")
+        await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
+        return True
+
     hub = RFBridgeHub(hass, entry)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = hub
     identifiers = entry.data.get(CONF_IDENTIFIERS) or [entry.entry_id]
@@ -1087,6 +1104,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     entry.async_on_unload(entry.add_update_listener(_async_update_listener))
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await hub.async_start()
+
     # The socket may receive its hello frame before every forwarded platform
     # has attached its dispatcher listener. Publish once on the next loop turn
     # so availability-derived entities cannot remain stuck at their startup state.
@@ -1099,6 +1117,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    if is_sensor_entry(entry):
+        return await hass.config_entries.async_unload_platforms(entry, ["sensor"])
+
     hub: RFBridgeHub | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:

@@ -16,16 +16,22 @@ from . import async_fetch_bridge_status, parse_commands
 from .const import (
     CONF_API_PORT,
     CONF_COMMANDS,
+    CONF_ENTRY_TYPE,
     CONF_HOST,
     CONF_HW_VERSION,
     CONF_IDENTIFIERS,
     CONF_KNOWN_COMMANDS,
     CONF_MODEL,
     CONF_NAME,
+    CONF_PARENT_ENTRY_ID,
+    CONF_PROTOCOL,
     CONF_SENSOR_DISCOVERY,
+    CONF_SENSOR_IDENTIFIER,
+    CONF_SENSOR_MEASUREMENTS,
     CONF_SW_VERSION,
     DEFAULT_API_PORT,
     DOMAIN,
+    ENTRY_TYPE_SENSOR,
 )
 
 
@@ -250,6 +256,59 @@ class RFBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 }
             ),
             errors=errors,
+        )
+
+    async def async_step_integration_discovery(
+        self, discovery_info: dict[str, Any]
+    ) -> config_entries.ConfigFlowResult:
+        """Offer a newly decoded RF sensor for explicit user approval."""
+        parent_entry_id = discovery_info.get(CONF_PARENT_ENTRY_ID)
+        protocol = discovery_info.get(CONF_PROTOCOL)
+        identifier = discovery_info.get(CONF_SENSOR_IDENTIFIER)
+        measurements = discovery_info.get(CONF_SENSOR_MEASUREMENTS)
+        if (
+            not isinstance(parent_entry_id, str)
+            or not isinstance(protocol, str)
+            or not isinstance(identifier, str)
+            or not isinstance(measurements, list)
+            or not measurements
+            or not all(isinstance(item, str) for item in measurements)
+        ):
+            return self.async_abort(reason="invalid_sensor_discovery")
+
+        parent_entry = self.hass.config_entries.async_get_entry(parent_entry_id)
+        if parent_entry is None or parent_entry.domain != DOMAIN:
+            return self.async_abort(reason="invalid_sensor_discovery")
+
+        sensor_unique_id = (
+            f"{DOMAIN}_sensor_{parent_entry_id}_{protocol.lower()}_{identifier.lower()}"
+        )
+        await self.async_set_unique_id(sensor_unique_id)
+        self._abort_if_unique_id_configured()
+        self._sensor_discovery = {
+            CONF_ENTRY_TYPE: ENTRY_TYPE_SENSOR,
+            CONF_PARENT_ENTRY_ID: parent_entry_id,
+            CONF_PROTOCOL: protocol,
+            CONF_SENSOR_IDENTIFIER: identifier,
+            CONF_SENSOR_MEASUREMENTS: sorted(set(measurements)),
+        }
+        title = f"{protocol} {identifier}"
+        self.context["title_placeholders"] = {"name": title}
+        return await self.async_step_sensor_confirm()
+
+    async def async_step_sensor_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> config_entries.ConfigFlowResult:
+        """Confirm adding one discovered RF sensor."""
+        discovery = getattr(self, "_sensor_discovery", None)
+        if not isinstance(discovery, dict):
+            return self.async_abort(reason="invalid_sensor_discovery")
+        title = f"{discovery[CONF_PROTOCOL]} {discovery[CONF_SENSOR_IDENTIFIER]}"
+        if user_input is not None:
+            return self.async_create_entry(title=title, data=discovery)
+        return self.async_show_form(
+            step_id="sensor_confirm",
+            description_placeholders={"name": title},
         )
 
     async def async_step_import(

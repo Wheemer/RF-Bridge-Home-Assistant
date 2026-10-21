@@ -1,16 +1,20 @@
 {
   "domain": "rf_bridge",
   "name": "RF Bridge",
-  "codeowners": ["@Wheemer"],
+  "codeowners": [
+    "@Wheemer"
+  ],
   "config_flow": true,
-  "dependencies": ["http"],
+  "dependencies": [
+    "http"
+  ],
   "documentation": "https://github.com/Wheemer/RF-Bridge-Home-Assistant",
   "integration_type": "hub",
   "iot_class": "local_push",
   "issue_tracker": "https://github.com/Wheemer/RF-Bridge-Home-Assistant/issues",
   "quality_scale": "bronze",
   "requirements": [],
-  "version": "1.1.2",
+  "version": "1.2.0",
   "zeroconf": [
     "_rfbridge._tcp.local."
   ]
