@@ -345,6 +345,7 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
         # The bridge owns the API listener while writing flash. A status probe
         # in this window recreates exactly the WebSocket pressure OTA avoids.
         next_probe = loop.time() + FIRMWARE_UPDATE_SETTLE_SECONDS
+        api_went_away = False
         while loop.time() < deadline:
             if self._hub.status.get(CONF_SW_VERSION) == version:
                 self._set_install_progress(100)
@@ -357,9 +358,19 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
                     if status.get(CONF_SW_VERSION) == version:
                         self._set_install_progress(100)
                         return True
-                    if status.get("update_last_result") == "staged":
+                    if api_went_away:
+                        # A responding API after its observed OTA disconnect is
+                        # evidence the bridge has restarted. Version verification
+                        # remains the only path to 100%.
+                        self._set_install_progress(95)
+                    elif status.get("update_last_result") == "staged":
                         self._set_install_progress(85)
                 except (TimeoutError, aiohttp.ClientError, ValueError) as err:
+                    # The updater deliberately closes the API while it writes
+                    # flash and reboots. Surface that observed transition rather
+                    # than leaving Home Assistant frozen at transfer completion.
+                    api_went_away = True
+                    self._set_install_progress(90)
                     _LOGGER.debug("RF Bridge has not returned from OTA yet: %s", err)
             await asyncio.sleep(1)
         verified = self._hub.status.get(CONF_SW_VERSION) == version

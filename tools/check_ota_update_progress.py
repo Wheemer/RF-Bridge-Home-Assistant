@@ -36,10 +36,18 @@ def main() -> None:
     assert entity._attr_update_percentage == 85
     assert writes == 2
 
+    entity._set_install_progress(90)
+    assert entity._attr_update_percentage == 90
+    assert writes == 3
+
+    entity._set_install_progress(95)
+    assert entity._attr_update_percentage == 95
+    assert writes == 4
+
     entity._clear_install_progress()
     assert entity._attr_in_progress is False
     assert entity._attr_update_percentage is None
-    assert writes == 3
+    assert writes == 5
 
 
 if __name__ == "__main__":
