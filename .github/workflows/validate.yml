@@ -27,8 +27,8 @@ jobs:
 
       - name: Validate the integration package
         run: |
-          ruff check custom_components/rf_bridge
-          python -m compileall -q custom_components/rf_bridge
+          ruff check custom_components/rf_bridge tools
+          python -m compileall -q custom_components/rf_bridge tools
           python - <<'PY'
           import json
           import yaml
@@ -50,6 +50,12 @@ jobs:
           import custom_components.rf_bridge.sensor
           import custom_components.rf_bridge.update
           PY
+          python tools/check_firmware_download_view.py
+          python tools/check_ota_integration_lifecycle.py
+          python tools/check_ota_update_progress.py
+          python tools/check_rf_bridge_entity_availability.py
+          python tools/check_rf_bridge_websocket_reconnect.py
+          python tools/check_rflink_sensor_parser.py
 
   hacs:
     runs-on: ubuntu-24.04

@@ -4,7 +4,7 @@
     "step": {
       "user": {
         "title": "RF Bridge",
-        "description": "Configure a local RF Bridge and optional command libraries. Commands must be JSON: {\"key\": {\"name\": \"Name\", \"command\": \"10;signal;sendRF;...\", \"icon\": \"mdi:remote\", \"sequence_delay\": 0.6}}.",
+        "description": "Configure a local RF Bridge and optional command libraries. See the documentation for the command-library JSON format.",
         "data": {
           "host": "Bridge host",
           "api_port": "Bridge API port",
