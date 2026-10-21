@@ -1,0 +1,66 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install validation dependencies
+        run: python -m pip install --upgrade homeassistant pyyaml ruff
+
+      - name: Validate the integration package
+        run: |
+          ruff check custom_components/rf_bridge
+          python -m compileall -q custom_components/rf_bridge
+          python - <<'PY'
+          import json
+          import yaml
+
+          for path in (
+              "custom_components/rf_bridge/manifest.json",
+              "custom_components/rf_bridge/strings.json",
+              "custom_components/rf_bridge/translations/en.json",
+          ):
+              with open(path, encoding="utf-8") as handle:
+                  json.load(handle)
+          with open("custom_components/rf_bridge/services.yaml", encoding="utf-8") as handle:
+              yaml.safe_load(handle)
+          import custom_components.rf_bridge
+          import custom_components.rf_bridge.binary_sensor
+          import custom_components.rf_bridge.button
+          import custom_components.rf_bridge.config_flow
+          import custom_components.rf_bridge.event
+          import custom_components.rf_bridge.sensor
+          import custom_components.rf_bridge.update
+          PY
+
+  hacs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: hacs/action@main
+        with:
+          category: integration
+
+  hassfest:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: home-assistant/actions/hassfest@master
