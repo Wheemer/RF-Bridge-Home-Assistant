@@ -2,7 +2,6 @@
   "domain": "rf_bridge",
   "name": "RF Bridge",
   "codeowners": ["@Wheemer"],
-  "categories": ["hub"],
   "config_flow": true,
   "dependencies": ["http"],
   "documentation": "https://github.com/Wheemer/RF-Bridge-Home-Assistant",
