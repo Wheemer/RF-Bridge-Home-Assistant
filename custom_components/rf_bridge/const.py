@@ -10,6 +10,7 @@ CONF_ICON = "icon"
 CONF_MODEL = "model"
 CONF_API_PORT = "api_port"
 CONF_NAME = "name"
+CONF_SENSOR_DISCOVERY = "sensor_discovery"
 CONF_SW_VERSION = "sw_version"
 
 DEFAULT_API_PORT = 8080

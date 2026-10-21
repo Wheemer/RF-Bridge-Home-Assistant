@@ -5,6 +5,7 @@ BUTTON = ROOT / "custom_components" / "rf_bridge" / "button.py"
 EVENT = ROOT / "custom_components" / "rf_bridge" / "event.py"
 INIT = ROOT / "custom_components" / "rf_bridge" / "__init__.py"
 SENSOR = ROOT / "custom_components" / "rf_bridge" / "sensor.py"
+CONFIG_FLOW = ROOT / "custom_components" / "rf_bridge" / "config_flow.py"
 
 
 def require(source: str, fragment: str, label: str) -> None:
@@ -16,6 +17,7 @@ button = BUTTON.read_text(encoding="utf-8")
 event = EVENT.read_text(encoding="utf-8")
 init = INIT.read_text(encoding="utf-8")
 sensor = SENSOR.read_text(encoding="utf-8")
+config_flow = CONFIG_FLOW.read_text(encoding="utf-8")
 
 for source, label in ((button, "button"), (event, "event")):
     require(source, "from homeassistant.helpers.dispatcher import async_dispatcher_connect", label)
@@ -28,3 +30,10 @@ require(sensor, "class RFBridgeDiscoveredSensorManager", "decoded sensor discove
 require(sensor, 'if event.get("raw") is True', "raw event exclusion")
 require(sensor, "er.async_entries_for_config_entry", "sensor registry restore")
 require(sensor, "rf_event_signal(entry.entry_id), manager.handle_event", "decoded event listener")
+require(sensor, "CONF_SENSOR_DISCOVERY", "sensor discovery preference")
+require(sensor, "self._hub.entry.options.get(CONF_SENSOR_DISCOVERY, True)", "sensor discovery preference gate")
+
+options_flow = config_flow.split("class RFBridgeOptionsFlow", maxsplit=1)[1]
+require(options_flow, "CONF_SENSOR_DISCOVERY", "sensor discovery option")
+if "CONF_COMMANDS" in options_flow or "CONF_KNOWN_COMMANDS" in options_flow:
+    raise SystemExit("The options flow must not expose raw command JSON")

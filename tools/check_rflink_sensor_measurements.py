@@ -47,7 +47,7 @@ def check_decoded_measurements() -> None:
 
 def check_discovery_lifecycle() -> None:
     added: list[object] = []
-    hub = SimpleNamespace(entry=SimpleNamespace(entry_id="test-entry"))
+    hub = SimpleNamespace(entry=SimpleNamespace(entry_id="test-entry", options={}))
     manager = RFBridgeDiscoveredSensorManager(
         SimpleNamespace(), hub, lambda entities: added.extend(entities)
     )
@@ -72,9 +72,24 @@ def check_discovery_lifecycle() -> None:
         "Oregon 021d Humidity",
     }
 
+    disabled_added: list[object] = []
+    disabled_hub = SimpleNamespace(
+        entry=SimpleNamespace(entry_id="disabled-entry", options={"sensor_discovery": False})
+    )
+    disabled_manager = RFBridgeDiscoveredSensorManager(
+        SimpleNamespace(), disabled_hub, lambda entities: disabled_added.extend(entities)
+    )
+    disabled_manager.handle_event(
+        {
+            "raw": False,
+            "message": "20;B1;Oregon;ID=021d;TEMP=00c8;HUM=42;",
+        }
+    )
+    assert not disabled_added
+
 
 def check_registry_restore() -> None:
-    hub = SimpleNamespace(entry=SimpleNamespace(entry_id="test-entry"))
+    hub = SimpleNamespace(entry=SimpleNamespace(entry_id="test-entry", options={}))
     manager = RFBridgeDiscoveredSensorManager(SimpleNamespace(), hub, lambda entities: None)
     registry = SimpleNamespace()
     entity_entry = SimpleNamespace(

@@ -22,14 +22,11 @@ from .const import (
     CONF_KNOWN_COMMANDS,
     CONF_MODEL,
     CONF_NAME,
+    CONF_SENSOR_DISCOVERY,
     CONF_SW_VERSION,
     DEFAULT_API_PORT,
     DOMAIN,
 )
-
-
-def _commands_to_text(commands: dict[str, Any]) -> str:
-    return json.dumps(commands or {}, indent=2, sort_keys=True)
 
 
 def _commands_from_text(text: str) -> dict[str, Any]:
@@ -41,10 +38,6 @@ def _commands_from_text(text: str) -> dict[str, Any]:
     if len(commands) != len(data):
         raise ValueError("One or more command definitions are invalid")
     return data
-
-
-def _known_commands_to_text(commands: dict[str, Any]) -> str:
-    return json.dumps(commands or {}, indent=2, sort_keys=True)
 
 
 def _known_commands_from_text(text: str) -> dict[str, Any]:
@@ -150,7 +143,11 @@ class RFBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 or self._discovery.get(CONF_SW_VERSION),
                 CONF_API_PORT: _api_port(data),
             },
-            options={CONF_COMMANDS: {}, CONF_KNOWN_COMMANDS: {}},
+            options={
+                CONF_COMMANDS: {},
+                CONF_KNOWN_COMMANDS: {},
+                CONF_SENSOR_DISCOVERY: True,
+            },
         )
 
     async def async_step_zeroconf_confirm(
@@ -238,6 +235,7 @@ class RFBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     options={
                         CONF_COMMANDS: commands,
                         CONF_KNOWN_COMMANDS: known_commands,
+                        CONF_SENSOR_DISCOVERY: True,
                     },
                 )
 
@@ -276,6 +274,7 @@ class RFBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             options={
                 CONF_COMMANDS: commands,
                 CONF_KNOWN_COMMANDS: known_commands,
+                CONF_SENSOR_DISCOVERY: True,
             },
         )
 
@@ -294,46 +293,19 @@ class RFBridgeOptionsFlow(config_entries.OptionsFlow):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> config_entries.ConfigFlowResult:
-        errors: dict[str, str] = {}
         if user_input is not None:
-            try:
-                commands = _commands_from_text(user_input.get(CONF_COMMANDS, "{}"))
-            except (json.JSONDecodeError, ServiceValidationError, ValueError):
-                errors[CONF_COMMANDS] = "invalid_commands"
-            try:
-                known_commands = _known_commands_from_text(
-                    user_input.get(CONF_KNOWN_COMMANDS, "{}")
-                )
-            except (json.JSONDecodeError, ValueError):
-                errors[CONF_KNOWN_COMMANDS] = "invalid_known_commands"
-            if not errors:
-                assert commands is not None
-                assert known_commands is not None
-                return self.async_create_entry(
-                    title="",
-                    data={
-                        CONF_COMMANDS: commands,
-                        CONF_KNOWN_COMMANDS: known_commands,
-                    },
-                )
+            options = dict(self.entry.options)
+            options[CONF_SENSOR_DISCOVERY] = user_input[CONF_SENSOR_DISCOVERY]
+            return self.async_create_entry(title="", data=options)
 
         return self.async_show_form(
             step_id="init",
             data_schema=vol.Schema(
                 {
                     vol.Optional(
-                        CONF_COMMANDS,
-                        default=_commands_to_text(
-                            self.entry.options.get(CONF_COMMANDS, {})
-                        ),
-                    ): cv.string,
-                    vol.Optional(
-                        CONF_KNOWN_COMMANDS,
-                        default=_known_commands_to_text(
-                            self.entry.options.get(CONF_KNOWN_COMMANDS, {})
-                        ),
-                    ): cv.string,
+                        CONF_SENSOR_DISCOVERY,
+                        default=self.entry.options.get(CONF_SENSOR_DISCOVERY, True),
+                    ): cv.boolean,
                 }
-            ),
-            errors=errors,
+            )
         )

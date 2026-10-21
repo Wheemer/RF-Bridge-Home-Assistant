@@ -28,7 +28,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from . import RFBridgeHub, diagnostics_signal, parse_rflink_message, rf_event_signal
-from .const import DOMAIN
+from .const import CONF_SENSOR_DISCOVERY, DOMAIN
 
 
 @dataclass(frozen=True, slots=True)
@@ -288,6 +288,8 @@ class RFBridgeDiscoveredSensorManager:
 
     @callback
     def handle_event(self, event: dict[str, Any]) -> None:
+        if self._hub.entry.options.get(CONF_SENSOR_DISCOVERY, True) is not True:
+            return
         if event.get("raw") is True:
             return
         message = event.get("message")

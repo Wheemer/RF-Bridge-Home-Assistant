@@ -31,16 +31,11 @@
     "step": {
       "init": {
         "title": "RF Bridge options",
-        "description": "Edit the command and known received command JSON.",
+        "description": "Choose whether decoded 433 MHz sensor transmissions create sensor entities.",
         "data": {
-          "commands": "Command library JSON",
-          "known_commands": "Known received command JSON"
+          "sensor_discovery": "Discover decoded 433 MHz sensors"
         }
       }
-    },
-    "error": {
-      "invalid_commands": "The command library JSON is invalid.",
-      "invalid_known_commands": "The known received command JSON is invalid."
     }
   },
   "exceptions": {
