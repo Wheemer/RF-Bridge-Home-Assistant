@@ -9,11 +9,14 @@ import homeassistant  # noqa: F401
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from homeassistant.components.update import UpdateEntityFeature
+
 from custom_components.rf_bridge.update import RFBridgeFirmwareUpdate
 
 
 def main() -> None:
     entity = object.__new__(RFBridgeFirmwareUpdate)
+    assert entity.supported_features & UpdateEntityFeature.PROGRESS
     writes = 0
 
     def write_state() -> None:
