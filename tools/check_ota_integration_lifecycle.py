@@ -30,7 +30,7 @@ def main() -> None:
         "self._hub.async_resume_after_firmware_update()",
         "def _set_install_progress(self, percentage: int)",
         "self._set_install_progress(35)",
-        "self._set_install_progress(50)",
+        "def _report_bridge_download_progress(self, sent: int, total: int)",
         "self._set_install_progress(100)",
         "self._clear_install_progress()",
     ):
