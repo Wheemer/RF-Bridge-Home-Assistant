@@ -10,7 +10,7 @@
   "issue_tracker": "https://github.com/Wheemer/RF-Bridge-Home-Assistant/issues",
   "quality_scale": "bronze",
   "requirements": [],
-  "version": "1.1.0",
+  "version": "1.1.1",
   "zeroconf": [
     "_rfbridge._tcp.local."
   ]

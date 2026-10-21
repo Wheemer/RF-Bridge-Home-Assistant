@@ -26,5 +26,5 @@ require(init, "@callback\n    def _async_publish_initial_diagnostics", "event-lo
 require(init, "async_call_later(hass, 0, _async_publish_initial_diagnostics)", "startup state refresh")
 require(sensor, "class RFBridgeDiscoveredSensorManager", "decoded sensor discovery manager")
 require(sensor, 'if event.get("raw") is True', "raw event exclusion")
-require(sensor, "er.async_entries_for_config_entry_id", "sensor registry restore")
+require(sensor, "er.async_entries_for_config_entry", "sensor registry restore")
 require(sensor, "rf_event_signal(entry.entry_id), manager.handle_event", "decoded event listener")

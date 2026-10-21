@@ -95,10 +95,11 @@ MEASUREMENTS: dict[str, RFBridgeMeasurementDescription] = {
     "kwatt": RFBridgeMeasurementDescription("kilowatt", "Power", "mdi:flash", SensorDeviceClass.POWER, "kW", SensorStateClass.MEASUREMENT),
     "lux": RFBridgeMeasurementDescription("light_intensity", "Illuminance", "mdi:brightness-5", SensorDeviceClass.ILLUMINANCE, "lx", SensorStateClass.MEASUREMENT),
     "meter": RFBridgeMeasurementDescription("meter_value", "Meter value", "mdi:counter"),
-    "rain": RFBridgeMeasurementDescription("total_rain", "Total rain", "mdi:weather-rainy", SensorDeviceClass.PRECIPITATION, "mm", SensorStateClass.TOTAL_INCREASING),
+    "rain": RFBridgeMeasurementDescription("rain", "Rain", "mdi:weather-rainy", SensorDeviceClass.PRECIPITATION, "mm", SensorStateClass.TOTAL_INCREASING),
     "rainrate": RFBridgeMeasurementDescription("rain_rate", "Rain rate", "mdi:weather-pouring", SensorDeviceClass.PRECIPITATION_INTENSITY, "mm/h", SensorStateClass.MEASUREMENT),
     "raintot": RFBridgeMeasurementDescription("total_rain", "Total rain", "mdi:weather-rainy", SensorDeviceClass.PRECIPITATION, "mm", SensorStateClass.TOTAL_INCREASING),
     "temp": RFBridgeMeasurementDescription("temperature", "Temperature", "mdi:thermometer", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS, SensorStateClass.MEASUREMENT),
+    "tempd": RFBridgeMeasurementDescription("temperature", "Temperature", "mdi:thermometer", SensorDeviceClass.TEMPERATURE, UnitOfTemperature.CELSIUS, SensorStateClass.MEASUREMENT),
     "sound": RFBridgeMeasurementDescription("noise_level", "Noise level", "mdi:bell-alert"),
     "uv": RFBridgeMeasurementDescription("uv_intensity", "UV index", "mdi:sunglasses", None, None, SensorStateClass.MEASUREMENT),
     "volt": RFBridgeMeasurementDescription("voltage", "Voltage", "mdi:flash-outline", SensorDeviceClass.VOLTAGE, "V", SensorStateClass.MEASUREMENT),
@@ -131,9 +132,20 @@ def _decode_measurement(field: str, value: str) -> str | int | float | None:
     if field == "bat":
         return value.upper()
     if field == "bforecast":
-        return {"0": "No information", "1": "Sunny", "2": "Partly cloudy", "3": "Cloudy", "4": "Rain"}.get(value, "Unknown")
+        return {
+            0: "No information",
+            1: "Sunny",
+            2: "Partly cloudy",
+            3: "Cloudy",
+            4: "Rain",
+        }.get(_decode_hex(value), "Unknown")
     if field in {"temp", "winchl", "wintmp"}:
         return _decode_signed_tenths(value)
+    if field == "tempd":
+        try:
+            return float(value)
+        except ValueError:
+            return None
     if field in {"awinsp", "rain", "rainrate", "raintot", "wings", "winsp"}:
         integer = _decode_hex(value)
         return integer / 10 if integer is not None else None
@@ -145,7 +157,9 @@ def _decode_measurement(field: str, value: str) -> str | int | float | None:
     if field in {"baro", "kwatt", "lux", "uv", "watt"}:
         return _decode_hex(value)
     if field == "hstatus":
-        return {"0": "Normal", "1": "Comfortable", "2": "Dry", "3": "Wet"}.get(value, "Unknown")
+        return {0: "Normal", 1: "Comfortable", 2: "Dry", 3: "Wet"}.get(
+            _decode_hex(value), "Unknown"
+        )
     try:
         return int(value)
     except ValueError:
@@ -260,7 +274,7 @@ class RFBridgeDiscoveredSensorManager:
     def restore(self) -> list[RFBridgeDiscoveredSensor]:
         registry = er.async_get(self._hass)
         restored: list[RFBridgeDiscoveredSensor] = []
-        for entity_entry in er.async_entries_for_config_entry_id(registry, self._hub.entry.entry_id):
+        for entity_entry in er.async_entries_for_config_entry(registry, self._hub.entry.entry_id):
             if entity_entry.domain != "sensor":
                 continue
             identity = _decode_sensor_identity(self._hub.entry.entry_id, entity_entry.unique_id)

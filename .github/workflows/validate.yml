@@ -56,6 +56,7 @@ jobs:
           python tools/check_rf_bridge_entity_availability.py
           python tools/check_rf_bridge_websocket_reconnect.py
           python tools/check_rflink_sensor_parser.py
+          python tools/check_rflink_sensor_measurements.py
 
   hacs:
     runs-on: ubuntu-24.04
