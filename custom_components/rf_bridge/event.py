@@ -77,11 +77,26 @@ class RFBridgeRfEventEntity(EventEntity):
             and event.get("command")
             and event.get("learning") is True
         )
-        if event_data.get("known") is not True and not raw_capture:
+        learning_candidate = (
+            event.get("learning") is True and event.get("candidate") is True
+        )
+        if (
+            event_data.get("known") is not True
+            and not raw_capture
+            and not learning_candidate
+        ):
             return
         event_data["sequence"] = event.get("sequence")
         event_data["device_millis"] = event.get("millis")
-        for key in ("raw", "pulse_count", "rssi", "truncated", "command"):
+        for key in (
+            "raw",
+            "pulse_count",
+            "rssi",
+            "truncated",
+            "command",
+            "learning",
+            "candidate",
+        ):
             if key in event:
                 event_data[key] = event[key]
         self._trigger_event("press", event_data)

@@ -182,6 +182,23 @@ def annotate_known_command(
             event_data["icon"] = icon
 
 
+def is_known_rf_event(event: dict[str, Any], known_commands: dict[str, Any]) -> bool:
+    """Return whether a decoded received frame is already configured.
+
+    Raw frames deliberately have no stable decoded identity, so they remain
+    learning candidates. A decoded frame is known only when its normalized
+    protocol/ID/switch/command key is explicitly configured by the user.
+    """
+    if event.get("raw") is True:
+        return False
+    message = event.get("message")
+    if not isinstance(message, str):
+        return False
+    event_data = parse_rflink_message(message)
+    annotate_known_command(event_data, known_commands)
+    return event_data.get("known") is True
+
+
 async def async_fetch_bridge_status(
     session: aiohttp.ClientSession, host: str, api_port: int
 ) -> dict[str, Any]:
@@ -420,14 +437,34 @@ class RFBridgeHub:
         sequence = event.get("sequence")
         if isinstance(sequence, int):
             self.rf_event_cursor = max(self.rf_event_cursor, sequence)
-        self.last_rf_event = event
-        if event.get("raw") is True and event.get("command"):
-            # Raw events are only actionable when the user explicitly armed
-            # learning. Preserve that state on the event before disarming so
-            # the event platform cannot admit unsolicited raw traffic.
-            event["learning"] = self.status.get("raw_learning_armed") is True
+        learning = self.status.get("raw_learning_armed") is True
+        if learning:
+            known_commands = self.entry.options.get(CONF_KNOWN_COMMANDS, {})
+            if not isinstance(known_commands, dict):
+                known_commands = {}
+            if is_known_rf_event(event, known_commands):
+                _LOGGER.debug(
+                    "Ignored configured RF event during learn: host=%s sequence=%s",
+                    self.host,
+                    sequence,
+                )
+                return
+
+            # Learning is exclusive at the Home Assistant event boundary, not
+            # at the radio. The receiver and decoders keep running, but only
+            # the first not-yet-configured frame becomes a learning candidate.
+            event = dict(event)
+            event["learning"] = True
+            event["candidate"] = True
             self._cancel_learning_expiry()
             self.status["raw_learning_armed"] = False
+        elif event.get("raw") is True and event.get("command"):
+            # The firmware emits raw frames only for an armed learn window.
+            # Do not allow an unsolicited raw frame to look actionable.
+            event = dict(event)
+            event["learning"] = False
+
+        self.last_rf_event = event
         self.async_write_diagnostics()
         async_dispatcher_send(self.hass, rf_event_signal(self.entry.entry_id), event)
 

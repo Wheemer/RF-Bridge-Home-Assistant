@@ -55,6 +55,7 @@ jobs:
           python tools/check_ota_update_progress.py
           python tools/check_rf_bridge_entity_availability.py
           python tools/check_rf_bridge_websocket_reconnect.py
+          python tools/check_rf_bridge_learn_filter.py
           python tools/check_rflink_sensor_parser.py
           python tools/check_rflink_sensor_measurements.py
 
