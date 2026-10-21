@@ -433,7 +433,7 @@ class RFBridgeHub:
                     ]
                     for identifier in identifiers:
                         device = device_registry.async_get_device_by_identifier(
-                            (DOMAIN, identifier)
+                            (DOMAIN, identifier), self.entry.entry_id
                         )
                         if device is not None:
                             device_registry.async_update_device(

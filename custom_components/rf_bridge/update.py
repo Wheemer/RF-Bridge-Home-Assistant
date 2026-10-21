@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -117,12 +118,17 @@ class FirmwareDownloadView(HomeAssistantView):
         self._downloads: dict[str, Path] = {}
         self._download_count: dict[str, int] = {}
         self._download_audit: dict[str, dict[str, str | int]] = {}
+        self._progress_callbacks: dict[str, Callable[[int, int], None]] = {}
 
-    def add(self, artifact: Path) -> str:
+    def add(
+        self, artifact: Path, progress_callback: Callable[[int, int], None] | None = None
+    ) -> str:
         """Register an unguessable URL for a signed artifact."""
         token = secrets.token_urlsafe(32)
         self._downloads[token] = artifact
         self._download_count[token] = 0
+        if progress_callback is not None:
+            self._progress_callbacks[token] = progress_callback
         return token
 
     def discard(self, token: str) -> None:
@@ -130,6 +136,7 @@ class FirmwareDownloadView(HomeAssistantView):
         self._downloads.pop(token, None)
         self._download_count.pop(token, None)
         self._download_audit.pop(token, None)
+        self._progress_callbacks.pop(token, None)
 
     def downloaded(self, token: str) -> bool:
         """Return whether the bridge requested this staged artifact."""
@@ -151,6 +158,7 @@ class FirmwareDownloadView(HomeAssistantView):
         # live until the caller verifies the bridge version or reports failure.
         request_count = self._download_count.get(token, 0) + 1
         self._download_count[token] = request_count
+        progress_callback = self._progress_callbacks.get(token)
         self._download_audit[token] = {
             "requests": request_count,
             "remote": request.remote or "",
@@ -161,8 +169,7 @@ class FirmwareDownloadView(HomeAssistantView):
         }
         # A signed OTA payload must be sent byte-for-byte as staged. Avoid
         # FileResponse negotiation, range handling, and inferred encodings.
-        return web.Response(
-            body=payload,
+        response = web.StreamResponse(
             headers={
                 "Cache-Control": "no-store",
                 "Content-Encoding": "identity",
@@ -170,6 +177,14 @@ class FirmwareDownloadView(HomeAssistantView):
                 "Content-Type": "application/octet-stream",
             },
         )
+        await response.prepare(request)
+        for offset in range(0, len(payload), 8192):
+            chunk = payload[offset : offset + 8192]
+            await response.write(chunk)
+            if progress_callback is not None:
+                progress_callback(offset + len(chunk), len(payload))
+        await response.write_eof()
+        return response
 
 
 def _get_download_view(hass: HomeAssistant) -> FirmwareDownloadView:
@@ -316,6 +331,13 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
         self._attr_update_percentage = None
         self.async_write_ha_state()
 
+    def _report_bridge_download_progress(self, sent: int, total: int) -> None:
+        """Map actual local artifact delivery into the OTA progress range."""
+        if total <= 0:
+            return
+        percentage = 35 + (sent * 50 // total)
+        self._set_install_progress(min(85, max(35, percentage)))
+
     async def _async_wait_for_version(self, version: str) -> bool:
         """Wait for and directly verify the bridge after a signed update."""
         loop = asyncio.get_running_loop()
@@ -330,7 +352,6 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
             now = loop.time()
             if now >= next_probe:
                 next_probe = now + 2.0
-                self._set_install_progress(50)
                 try:
                     status = await self._hub.async_probe_status()
                     if status.get(CONF_SW_VERSION) == version:
@@ -372,7 +393,9 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
                 artifact = await _async_stage_release(self.hass, self._hub.entry, release)
                 self._set_install_progress(25)
                 view = _get_download_view(self.hass)
-                token = view.add(artifact)
+                token = view.add(
+                    artifact, progress_callback=self._report_bridge_download_progress
+                )
                 disconnected_after_schedule = False
                 try:
                     await self._hub.async_schedule_firmware_update(
