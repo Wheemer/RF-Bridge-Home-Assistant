@@ -64,6 +64,15 @@ MAX_TX_MS = 120_000
 DEFAULT_SEQUENCE_DELAY = 0.6
 MAX_SEQUENCE_DELAY = 10.0
 
+_RUNTIME_CHECKPOINT_NAMES = {
+    0: "boot",
+    1: "websocket_connect",
+    2: "websocket_learn",
+    3: "raw_rf_captured",
+    4: "raw_rf_delivered",
+    5: "websocket_command",
+}
+
 
 def diagnostics_signal(entry_id: str) -> str:
     return f"{DOMAIN}_{entry_id}_diagnostics_updated"
@@ -248,12 +257,14 @@ class RFBridgeHub:
         self.ws_connect_count = 0
         self.ws_disconnect_count = 0
         self.last_status_at: str | None = None
+        self._last_reported_reset_context: tuple[Any, ...] | None = None
         self.rf_event_cursor: int = 0
         self.last_rf_event: dict[str, Any] | None = None
         self.available: bool = False
         self.ws_connected: bool = False
         self._ws: aiohttp.ClientWebSocketResponse | None = None
         self._ws_task: asyncio.Task | None = None
+        self._ws_stopping = False
         self._ws_ready = asyncio.Event()
         self._ws_lock = asyncio.Lock()
         self._tx_lock = asyncio.Lock()
@@ -286,11 +297,14 @@ class RFBridgeHub:
         }
 
     def _mark_unreachable(self, err: str) -> None:
+        was_connected = self.available or self.ws_connected
         self.available = False
         if self.ws_connected:
             self.ws_disconnect_count += 1
             self.last_ws_disconnected_at = dt_util.utcnow().isoformat()
         self.ws_connected = False
+        if was_connected:
+            _LOGGER.warning("RF Bridge became unreachable: host=%s error=%s", self.host, err)
         self._ws_ready.clear()
         if self.last_command is not None and self.last_success is None:
             self.last_success = False
@@ -306,6 +320,7 @@ class RFBridgeHub:
         if changed:
             self.ws_connect_count += 1
             self.last_ws_connected_at = dt_util.utcnow().isoformat()
+            _LOGGER.info("RF Bridge connected: host=%s", self.host)
             self.async_write_diagnostics()
 
     def _reject_pending(self, exc: Exception) -> None:
@@ -316,6 +331,7 @@ class RFBridgeHub:
 
     async def async_start(self) -> None:
         """Start the reconnect loop without blocking Home Assistant startup."""
+        self._ws_stopping = False
         if self._ws_task is None:
             self._ws_task = self.hass.async_create_background_task(
                 self._ws_loop(),
@@ -323,6 +339,7 @@ class RFBridgeHub:
             )
 
     async def async_stop(self) -> None:
+        self._ws_stopping = True
         self._cancel_learning_expiry()
         if self._ws_task is not None:
             self._ws_task.cancel()
@@ -380,12 +397,20 @@ class RFBridgeHub:
             finally:
                 self._reject_pending(aiohttp.ClientError("WebSocket disconnected"))
                 self._ws = None
+                ota_handoff = self._ota_quiet_until > asyncio.get_running_loop().time()
                 if self.ws_connected:
-                    self.ws_disconnect_count += 1
-                    self.last_ws_disconnected_at = dt_util.utcnow().isoformat()
-                self.ws_connected = False
-                self._ws_ready.clear()
-                self.async_write_diagnostics()
+                    if self._ws_stopping or ota_handoff:
+                        self.ws_disconnect_count += 1
+                        self.last_ws_disconnected_at = dt_util.utcnow().isoformat()
+                        self.ws_connected = False
+                        self._ws_ready.clear()
+                        self.async_write_diagnostics()
+                    else:
+                        self._mark_unreachable("WebSocket closed")
+                else:
+                    self.ws_connected = False
+                    self._ws_ready.clear()
+                    self.async_write_diagnostics()
             await asyncio.sleep(WS_RECONNECT_SECONDS)
 
     async def _handle_ws_message(
@@ -397,6 +422,7 @@ class RFBridgeHub:
             if isinstance(status, dict):
                 self.status = status
                 self.last_status_at = dt_util.utcnow().isoformat()
+                self._log_reset_context(status)
                 live_version = status.get(CONF_SW_VERSION)
                 if isinstance(
                     live_version, str
@@ -418,6 +444,23 @@ class RFBridgeHub:
                 self.rf_event_cursor = cursor
             if persistent:
                 self._mark_reachable()
+                signal = status.get("signal")
+                signal_status = signal if isinstance(signal, dict) else {}
+                _LOGGER.debug(
+                    "RF Bridge hello: host=%s version=%s uptime=%s heap_free=%s "
+                    "heap_frag=%s reset_reason=%s async_rx_enabled=%s "
+                    "async_rx_scanning=%s rx_count=%s decoded_count=%s",
+                    self.host,
+                    status.get(CONF_SW_VERSION),
+                    status.get("uptime"),
+                    status.get("heap_free"),
+                    status.get("heap_frag"),
+                    status.get("reset_reason"),
+                    signal_status.get("async_receiver_enabled"),
+                    signal_status.get("async_receiver_scanning"),
+                    signal_status.get("received_signal_count"),
+                    signal_status.get("successfully_decoded_count"),
+                )
             else:
                 self.available = True
                 self.last_error = None
@@ -435,6 +478,40 @@ class RFBridgeHub:
             future = self._pending.pop(request_id, None)
             if future is not None and not future.done():
                 future.set_result(payload)
+
+    def _log_reset_context(self, status: dict[str, Any]) -> None:
+        """Log one actionable field postmortem per bridge reset."""
+        checkpoint = status.get("previous_runtime_checkpoint")
+        if isinstance(checkpoint, bool) or not isinstance(checkpoint, int):
+            return
+        reset_reason = status.get("reset_reason", "unknown")
+        requested_source = status.get("last_requested_reboot_source", "unknown")
+        reset_info = status.get("reset_info")
+        context = (
+            reset_reason,
+            requested_source,
+            checkpoint,
+            status.get("previous_runtime_heap_free"),
+            reset_info,
+        )
+        if context == self._last_reported_reset_context:
+            return
+        self._last_reported_reset_context = context
+        log = (
+            _LOGGER.warning
+            if reset_reason == "Software/System restart" and requested_source == "unknown"
+            else _LOGGER.info
+        )
+        log(
+            "RF Bridge reset context: host=%s reason=%s requested_source=%s "
+            "last_checkpoint=%s pre_reset_heap=%s reset_info=%s",
+            self.host,
+            reset_reason,
+            requested_source,
+            _RUNTIME_CHECKPOINT_NAMES.get(checkpoint, f"unknown_{checkpoint}"),
+            status.get("previous_runtime_heap_free", "unknown"),
+            reset_info if isinstance(reset_info, str) else "n/a",
+        )
 
     def _handle_rf_event(self, event: dict[str, Any]) -> None:
         sequence = event.get("sequence")
@@ -461,6 +538,15 @@ class RFBridgeHub:
             event["candidate"] = True
             self._cancel_learning_expiry()
             self.status["raw_learning_armed"] = False
+            _LOGGER.info(
+                "RF Bridge learned RF candidate: host=%s sequence=%s raw=%s "
+                "pulse_count=%s rssi=%s",
+                self.host,
+                sequence,
+                event.get("raw"),
+                event.get("pulse_count"),
+                event.get("rssi"),
+            )
         elif event.get("raw") is True and event.get("command"):
             # The firmware emits raw frames only for an armed learn window.
             # Do not allow an unsolicited raw frame to look actionable.
@@ -469,6 +555,16 @@ class RFBridgeHub:
 
         self.last_rf_event = event
         self.async_write_diagnostics()
+        _LOGGER.debug(
+            "RF Bridge RF event: host=%s sequence=%s raw=%s learning=%s "
+            "pulse_count=%s rssi=%s",
+            self.host,
+            sequence,
+            event.get("raw"),
+            event.get("learning", False),
+            event.get("pulse_count"),
+            event.get("rssi"),
+        )
         async_dispatcher_send(self.hass, rf_event_signal(self.entry.entry_id), event)
 
     def _cancel_learning_expiry(self) -> None:
@@ -633,6 +729,7 @@ class RFBridgeHub:
             self.status.update(runtime)
             self.last_status_at = dt_util.utcnow().isoformat()
         self.status["raw_learning_armed"] = True
+        _LOGGER.info("RF Bridge learning armed: host=%s timeout=%ss", self.host, learn_seconds)
         self._cancel_learning_expiry()
         self._learning_expiry_cancel = async_call_later(
             self.hass, learn_seconds, self._learning_expired
@@ -681,6 +778,7 @@ class RFBridgeHub:
         self.last_command = None
         self.last_error = None
         self.last_success = True
+        _LOGGER.info("RF Bridge OTA handoff acknowledged: host=%s", self.host)
         self.async_write_diagnostics()
 
         # The firmware acknowledges first, then closes WebSocket allocations

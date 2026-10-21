@@ -429,9 +429,20 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
                         reason = f"{reason}; the bridge never requested the staged artifact"
                     if update_detail:
                         reason = f"{reason}: {'; '.join(update_detail)}"
+                    _LOGGER.error(
+                        "RF Bridge firmware update failed: host=%s version=%s reason=%s",
+                        self._hub.host,
+                        release.version,
+                        reason,
+                    )
                     raise HomeAssistantError(
                         f"RF Bridge did not report firmware {release.version} {reason}"
                     )
+                _LOGGER.info(
+                    "RF Bridge firmware update verified: host=%s version=%s",
+                    self._hub.host,
+                    release.version,
+                )
                 self._release = release
                 self.async_write_ha_state()
                 view.discard(token)
