@@ -12,7 +12,7 @@ import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse, callback
-from homeassistant.exceptions import ConfigEntryNotReady, ServiceValidationError
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -25,18 +25,15 @@ from .const import (
     CONF_COMMAND,
     CONF_COMMAND_KEY,
     CONF_COMMANDS,
-    CONF_ENTRY_TYPE,
     CONF_HOST,
     CONF_HW_VERSION,
     CONF_IDENTIFIERS,
     CONF_KNOWN_COMMANDS,
     CONF_MODEL,
     CONF_NAME,
-    CONF_PARENT_ENTRY_ID,
     CONF_SW_VERSION,
     DEFAULT_API_PORT,
     DOMAIN,
-    ENTRY_TYPE_SENSOR,
     PLATFORMS,
     SERVICE_SEND_NAMED,
     SERVICE_SEND_RAW,
@@ -762,15 +759,25 @@ class RFBridgeHub:
 
     async def async_schedule_firmware_update(self, url: str) -> None:
         """Ask the bridge to fetch one signed firmware artifact."""
-        result = await self._ws_request(
-            {"type": "update", "url": url},
-            timeout=WS_ACTION_TIMEOUT,
-            connection_timeout=FIRMWARE_UPDATE_CONNECTION_WAIT_SECONDS,
-        )
+        loop = asyncio.get_running_loop()
+        self._ota_quiet_until = loop.time() + FIRMWARE_UPDATE_QUIET_SECONDS
+        self._ota_quiet_event.clear()
+        try:
+            result = await self._ws_request(
+                {"type": "update", "url": url},
+                timeout=WS_ACTION_TIMEOUT,
+                connection_timeout=FIRMWARE_UPDATE_CONNECTION_WAIT_SECONDS,
+            )
+        except BaseException:
+            self._ota_quiet_until = 0.0
+            self._ota_quiet_event.set()
+            raise
         if result.get("type") != "update_scheduled" or result.get("ok") is not True:
             message = result.get("message") or "Update request was rejected"
             self.last_error = str(message)
             self.async_write_diagnostics()
+            self._ota_quiet_until = 0.0
+            self._ota_quiet_event.set()
             raise ServiceValidationError(
                 f"RF Bridge update failed for {self.host}: {message}"
             )
@@ -784,9 +791,7 @@ class RFBridgeHub:
         # The firmware acknowledges first, then closes WebSocket allocations
         # before it starts writing flash. Do not reconnect or probe during that
         # small transfer window.
-        self._ota_quiet_until = (
-            asyncio.get_running_loop().time() + FIRMWARE_UPDATE_QUIET_SECONDS
-        )
+        self._ota_quiet_until = loop.time() + FIRMWARE_UPDATE_QUIET_SECONDS
         self._ota_quiet_event.clear()
         if self._ws is not None and not self._ws.closed:
             await self._ws.close()
@@ -1169,22 +1174,8 @@ async def async_setup(hass: HomeAssistant, config: dict[str, Any]) -> bool:
     return True
 
 
-def is_sensor_entry(entry: ConfigEntry) -> bool:
-    """Return whether this entry represents one accepted RF sensor."""
-    return entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_SENSOR
-
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _async_register_services(hass)
-    if is_sensor_entry(entry):
-        parent_entry_id = entry.data.get(CONF_PARENT_ENTRY_ID)
-        if not isinstance(parent_entry_id, str) or parent_entry_id not in hass.data.get(
-            DOMAIN, {}
-        ):
-            raise ConfigEntryNotReady("RF Bridge parent entry is not loaded")
-        await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
-        return True
-
     hub = RFBridgeHub(hass, entry)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = hub
     identifiers = entry.data.get(CONF_IDENTIFIERS) or [entry.entry_id]
@@ -1215,9 +1206,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    if is_sensor_entry(entry):
-        return await hass.config_entries.async_unload_platforms(entry, ["sensor"])
-
     hub: RFBridgeHub | None = hass.data.get(DOMAIN, {}).get(entry.entry_id)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:

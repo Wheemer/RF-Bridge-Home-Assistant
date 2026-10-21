@@ -36,9 +36,9 @@
     "step": {
       "init": {
         "title": "RF Bridge options",
-        "description": "Choose whether newly decoded 433 MHz sensors are offered for approval.",
+        "description": "Choose whether decoded environmental sensors are added automatically under this RF Bridge.",
         "data": {
-          "sensor_discovery": "Offer newly decoded 433 MHz sensors"
+          "sensor_discovery": "Automatically add decoded environmental sensors"
         }
       }
     }

@@ -40,14 +40,14 @@ require(
 )
 require(
     sensor,
-    "class RFBridgePendingSensorDiscoveryManager",
+    "class RFBridgeDynamicSensorManager",
     "decoded sensor discovery manager",
 )
-require(sensor, 'if event.get("raw") is True', "raw event exclusion")
+require(sensor, 'event.get("raw") is True', "raw event exclusion")
 require(sensor, "er.async_entries_for_config_entry", "sensor registry restore")
 require(
     sensor,
-    "rf_event_signal(entry.entry_id), handle_event",
+    "rf_event_signal(entry.entry_id), sensor_manager.handle_event",
     "decoded event listener",
 )
 require(sensor, "CONF_SENSOR_DISCOVERY", "sensor discovery preference")
