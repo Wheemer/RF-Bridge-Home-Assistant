@@ -15,10 +15,6 @@
       "zeroconf_confirm": {
         "title": "RF Bridge",
         "description": "Do you want to add {name}?"
-      },
-      "sensor_confirm": {
-        "title": "New 433 MHz sensor",
-        "description": "Add the newly detected sensor {name}?"
       }
     },
     "error": {
@@ -28,19 +24,7 @@
     },
     "abort": {
       "already_configured": "This RF Bridge is already configured.",
-      "invalid_discovery": "The RF Bridge discovery data is invalid.",
-      "invalid_sensor_discovery": "The discovered sensor data is invalid."
-    }
-  },
-  "options": {
-    "step": {
-      "init": {
-        "title": "RF Bridge options",
-        "description": "Choose whether decoded environmental sensors are added automatically under this RF Bridge.",
-        "data": {
-          "sensor_discovery": "Automatically add decoded environmental sensors"
-        }
-      }
+      "invalid_discovery": "The RF Bridge discovery data is invalid."
     }
   },
   "exceptions": {

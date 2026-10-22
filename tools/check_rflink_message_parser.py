@@ -18,4 +18,4 @@ for fragment in required:
     if fragment not in source:
         raise SystemExit(f"Missing hexadecimal RFLink sequence handling: {fragment}")
 
-print("rflink_sensor_parser=passed")
+print("rflink_message_parser=passed")

@@ -14,12 +14,8 @@ KNOWN = {"newkaku_01234567_1_on": {"name": "Kitchen remote on"}}
 
 
 def main() -> None:
-    known_event = {
-        "message": "20;00;NewKaku;ID=01234567;SWITCH=1;CMD=ON;"
-    }
-    unknown_decoded_event = {
-        "message": "20;00;NewKaku;ID=89ABCDEF;SWITCH=1;CMD=ON;"
-    }
+    known_event = {"message": "20;00;NewKaku;ID=01234567;SWITCH=1;CMD=ON;"}
+    unknown_decoded_event = {"message": "20;00;NewKaku;ID=89ABCDEF;SWITCH=1;CMD=ON;"}
     raw_event = {"raw": True, "command": "10;signal;sendRF;{...}"}
 
     assert is_known_rf_event(known_event, KNOWN)
@@ -28,7 +24,9 @@ def main() -> None:
 
     dispatched: list[dict[str, object]] = []
     original_dispatch = integration.async_dispatcher_send
-    integration.async_dispatcher_send = lambda _hass, _signal, event: dispatched.append(event)
+    integration.async_dispatcher_send = lambda _hass, _signal, event: dispatched.append(
+        event
+    )
     try:
         hub = object.__new__(RFBridgeHub)
         hub.entry = type(
@@ -53,10 +51,19 @@ def main() -> None:
         assert dispatched[0]["learning"] is True
         assert dispatched[0]["candidate"] is True
         assert hub.status["raw_learning_armed"] is False
+
+        # Any unrecognized RF frame is a valid learn candidate, including raw
+        # protocols that do not have a built-in decoder.
+        dispatched.clear()
+        hub.status["raw_learning_armed"] = True
+        hub._handle_rf_event({**raw_event, "sequence": 3})
+        assert len(dispatched) == 1
+        assert dispatched[0]["learning"] is True
+        assert dispatched[0]["candidate"] is True
+        assert hub.status["raw_learning_armed"] is False
     finally:
         integration.async_dispatcher_send = original_dispatch
 
 
 if __name__ == "__main__":
     main()
-

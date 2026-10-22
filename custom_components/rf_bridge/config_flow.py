@@ -6,7 +6,6 @@ from typing import Any
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.core import callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -22,7 +21,6 @@ from .const import (
     CONF_KNOWN_COMMANDS,
     CONF_MODEL,
     CONF_NAME,
-    CONF_SENSOR_DISCOVERY,
     CONF_SW_VERSION,
     DEFAULT_API_PORT,
     DOMAIN,
@@ -146,7 +144,6 @@ class RFBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             options={
                 CONF_COMMANDS: {},
                 CONF_KNOWN_COMMANDS: {},
-                CONF_SENSOR_DISCOVERY: True,
             },
         )
 
@@ -235,7 +232,6 @@ class RFBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     options={
                         CONF_COMMANDS: commands,
                         CONF_KNOWN_COMMANDS: known_commands,
-                        CONF_SENSOR_DISCOVERY: True,
                     },
                 )
 
@@ -274,38 +270,5 @@ class RFBridgeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             options={
                 CONF_COMMANDS: commands,
                 CONF_KNOWN_COMMANDS: known_commands,
-                CONF_SENSOR_DISCOVERY: True,
             },
-        )
-
-    @staticmethod
-    @callback
-    def async_get_options_flow(
-        config_entry: config_entries.ConfigEntry,
-    ) -> config_entries.OptionsFlow:
-        return RFBridgeOptionsFlow(config_entry)
-
-
-class RFBridgeOptionsFlow(config_entries.OptionsFlow):
-    def __init__(self, entry: config_entries.ConfigEntry) -> None:
-        self.entry = entry
-
-    async def async_step_init(
-        self, user_input: dict[str, Any] | None = None
-    ) -> config_entries.ConfigFlowResult:
-        if user_input is not None:
-            options = dict(self.entry.options)
-            options[CONF_SENSOR_DISCOVERY] = user_input[CONF_SENSOR_DISCOVERY]
-            return self.async_create_entry(title="", data=options)
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_SENSOR_DISCOVERY,
-                        default=self.entry.options.get(CONF_SENSOR_DISCOVERY, True),
-                    ): cv.boolean,
-                }
-            )
         )

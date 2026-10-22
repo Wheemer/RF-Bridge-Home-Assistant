@@ -16,7 +16,7 @@
 
 ---
 
-RF Bridge connects Home Assistant to the modified Sonoff RF Bridge firmware through its local WebSocket API. It handles bridge discovery, configuration, named command buttons, learned RF events, approved decoded 433 MHz sensor devices, diagnostics, and signed firmware updates.
+RF Bridge connects Home Assistant to the modified Sonoff RF Bridge firmware through its local WebSocket API. It handles bridge discovery, configuration, named command buttons, learned RF events, diagnostics, and signed firmware updates.
 
 ## Install
 
@@ -32,9 +32,6 @@ RF Bridge connects Home Assistant to the modified Sonoff RF Bridge firmware thro
 - Zeroconf discovery and config-flow setup.
 - Named Home Assistant buttons for configured RF commands.
 - One RF event entity for known commands and explicit learn captures.
-- New decoded 433 MHz measurement sensors appear as normal Home Assistant discoveries for explicit approval before entities are created.
-- Accepted sensor devices use the bridge's existing local WebSocket event stream for temperature, humidity, rain, wind, pressure, power, voltage, and related fields.
-- Existing accepted sensors and pending discoveries are deduplicated; raw captures and remote-button frames never create sensor discoveries.
 - A firmware update entity that consumes signed releases from the [firmware repository](https://github.com/Wheemer/RFLink32-Sonoff-RF-Bridge).
 
 ## Update Model

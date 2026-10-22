@@ -38,26 +38,15 @@ require(
     "async_call_later(hass, 0, _async_publish_initial_diagnostics)",
     "startup state refresh",
 )
+require(sensor, "class RFBridgeSensor", "bridge diagnostic sensor")
 require(
     sensor,
-    "class RFBridgeDynamicSensorManager",
-    "decoded sensor discovery manager",
+    "async_add_entities([RFBridgeSensor(hub, description) for description in SENSORS])",
+    "static bridge sensor setup",
 )
-require(sensor, 'event.get("raw") is True', "raw event exclusion")
-require(sensor, "er.async_entries_for_config_entry", "sensor registry restore")
-require(
-    sensor,
-    "rf_event_signal(entry.entry_id), sensor_manager.handle_event",
-    "decoded event listener",
-)
-require(sensor, "CONF_SENSOR_DISCOVERY", "sensor discovery preference")
-require(
-    sensor,
-    "self._hub.entry.options.get(CONF_SENSOR_DISCOVERY, True)",
-    "sensor discovery preference gate",
-)
-
-options_flow = config_flow.split("class RFBridgeOptionsFlow", maxsplit=1)[1]
-require(options_flow, "CONF_SENSOR_DISCOVERY", "sensor discovery option")
-if "CONF_COMMANDS" in options_flow or "CONF_KNOWN_COMMANDS" in options_flow:
-    raise SystemExit("The options flow must not expose raw command JSON")
+if "RFBridgeDynamicSensorManager" in sensor:
+    raise SystemExit("Environmental sensor discovery must not be present")
+if "async_get_options_flow" in config_flow:
+    raise SystemExit(
+        "The removed sensor-discovery setting must not leave an options flow"
+    )
