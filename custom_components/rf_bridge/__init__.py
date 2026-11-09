@@ -12,7 +12,7 @@ import aiohttp
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse, callback
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -467,7 +467,14 @@ class RFBridgeHub:
         if msg_type == "rf_event":
             event = payload.get("event")
             if isinstance(event, dict):
-                self._handle_rf_event(event)
+                if event.get("learn_capture") is True:
+                    capture = (event.get("sequence"), event.get("command"))
+                    if capture != getattr(self, "_last_learn_capture", None):
+                        self._handle_rf_event(event)
+                        self._last_learn_capture = capture
+                    self.hass.async_create_task(self._async_ack_learn(event.get("sequence")))
+                else:
+                    self._handle_rf_event(event)
             return
 
         request_id = payload.get("id")
@@ -510,11 +517,19 @@ class RFBridgeHub:
             reset_info if isinstance(reset_info, str) else "n/a",
         )
 
+    async def _async_ack_learn(self, sequence: Any) -> None:
+        if not isinstance(sequence, int) or isinstance(sequence, bool):
+            return
+        try:
+            await self._ws_request({"type": "learn_ack", "sequence": sequence}, timeout=WS_ACTION_TIMEOUT)
+        except (TimeoutError, aiohttp.ClientError, HomeAssistantError) as err:
+            _LOGGER.warning("Learn receipt acknowledgement failed: %s", err)
+
     def _handle_rf_event(self, event: dict[str, Any]) -> None:
         sequence = event.get("sequence")
         if isinstance(sequence, int):
             self.rf_event_cursor = max(self.rf_event_cursor, sequence)
-        learning = self.status.get("raw_learning_armed") is True
+        learning = self.status.get("raw_learning_armed") is True or event.get("learn_capture") is True
         if learning:
             known_commands = self.entry.options.get(CONF_KNOWN_COMMANDS, {})
             if not isinstance(known_commands, dict):
@@ -760,8 +775,9 @@ class RFBridgeHub:
     async def async_schedule_firmware_update(self, url: str) -> None:
         """Ask the bridge to fetch one signed firmware artifact."""
         loop = asyncio.get_running_loop()
-        self._ota_quiet_until = loop.time() + FIRMWARE_UPDATE_QUIET_SECONDS
-        self._ota_quiet_event.clear()
+        # Keep reconnects enabled until the bridge accepts the handoff.
+        self._ota_quiet_until = 0.0
+        self._ota_quiet_event.set()
         try:
             result = await self._ws_request(
                 {"type": "update", "url": url},

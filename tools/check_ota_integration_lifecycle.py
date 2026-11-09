@@ -24,14 +24,14 @@ def main() -> None:
             raise SystemExit(f"OTA reconnect contract is incomplete: {required}")
 
     for required in (
-        "FIRMWARE_UPDATE_VERIFY_SECONDS = 75",
+        "FIRMWARE_UPDATE_VERIFY_SECONDS = 600",
         "FIRMWARE_UPDATE_SETTLE_SECONDS = 3",
         "verified = await self._async_wait_for_version(release.version)",
         "self._hub.async_resume_after_firmware_update()",
         "def _set_install_progress(self, percentage: int)",
         "self._set_install_progress(35)",
         "api_went_away = False",
-        "self._set_install_progress(90)",
+        "self._set_install_progress(99)",
         "self._set_install_progress(95)",
         "def _report_bridge_download_progress(self, sent: int, total: int)",
         "self._set_install_progress(100)",

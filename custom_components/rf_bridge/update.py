@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import logging
 import secrets
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.storage import Store
 
 from . import RFBridgeHub, diagnostics_signal
 from .const import CONF_SW_VERSION, DOMAIN
@@ -41,7 +43,7 @@ MAX_FIRMWARE_BYTES = 450_000
 DOWNLOAD_ROUTE = "/api/rf_bridge/firmware/{token}"
 DOWNLOAD_VIEW_KEY = "firmware_download_view"
 DOWNLOAD_VIEW_DATA_KEY = f"{DOMAIN}_{DOWNLOAD_VIEW_KEY}"
-FIRMWARE_UPDATE_VERIFY_SECONDS = 75
+FIRMWARE_UPDATE_VERIFY_SECONDS = 600
 # OTA stops the bridge API while it writes flash.  A brief grace period lets
 # that handoff begin without adding a fixed 15-second tail after a fast reboot.
 FIRMWARE_UPDATE_SETTLE_SECONDS = 3
@@ -265,10 +267,25 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
         self._refresh_lock = asyncio.Lock()
         self._install_lock = asyncio.Lock()
         self._attr_unique_id = f"{hub.entry.entry_id}_firmware_update"
+        self._maintenance_until = 0.0
+        self._maintenance_store = None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "ota_maintenance_until": self._maintenance_until,
+            "installation_phase": getattr(self, "_installation_phase", None),
+        }
 
     @property
     def available(self) -> bool:
-        return self._hub.available
+        # Installation deliberately disconnects the bridge. Preserve update
+        # progress and the maintenance signal until verification finishes.
+        return (
+            self._hub.available
+            or bool(getattr(self, "_attr_in_progress", False))
+            or getattr(self, "_maintenance_until", 0.0) > time.time()
+        )
 
     @property
     def device_info(self) -> dict[str, Any]:
@@ -293,6 +310,14 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
         return self._release.release_notes if self._release else None
 
     async def async_added_to_hass(self) -> None:
+        self._maintenance_store = Store(
+            self.hass, 1, f"{DOMAIN}.ota_maintenance.{self._hub.entry.entry_id}"
+        )
+        saved = await self._maintenance_store.async_load()
+        if isinstance(saved, dict):
+            value = saved.get("until")
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                self._maintenance_until = min(float(value), time.time() + 900)
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
@@ -316,8 +341,15 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
 
     def _set_install_progress(self, percentage: int) -> None:
         """Publish a verified OTA phase through Home Assistant's update UI."""
+        current = getattr(self, "_attr_update_percentage", None)
         if (
-            getattr(self, "_attr_update_percentage", None) == percentage
+            isinstance(current, int)
+            and getattr(self, "_attr_in_progress", False)
+            and percentage < current
+        ):
+            return
+        if (
+            current == percentage
             and getattr(self, "_attr_in_progress", False)
         ):
             return
@@ -337,6 +369,9 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
             return
         percentage = 35 + (sent * 50 // total)
         self._set_install_progress(min(85, max(35, percentage)))
+        if sent >= total:
+            self._installation_phase = "Verifying firmware and waiting for restart"
+            self.async_write_ha_state()
 
     async def _async_wait_for_version(self, version: str) -> bool:
         """Wait for and directly verify the bridge after a signed update."""
@@ -358,19 +393,25 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
                     if status.get(CONF_SW_VERSION) == version:
                         self._set_install_progress(100)
                         return True
-                    if api_went_away:
+                    if status.get("update_last_result") == "failed":
+                        raise HomeAssistantError(
+                            f"RF Bridge OTA failed: {status.get('update_error', 'unknown error')}"
+                        )
+                    if status.get("update_last_result") == "staged":
+                        self._installation_phase = "Firmware staged; waiting for restart"
+                        self._set_install_progress(99)
+                    elif api_went_away:
                         # A responding API after its observed OTA disconnect is
                         # evidence the bridge has restarted. Version verification
                         # remains the only path to 100%.
                         self._set_install_progress(95)
-                    elif status.get("update_last_result") == "staged":
-                        self._set_install_progress(85)
                 except (TimeoutError, aiohttp.ClientError, ValueError) as err:
                     # The updater deliberately closes the API while it writes
                     # flash and reboots. Surface that observed transition rather
                     # than leaving Home Assistant frozen at transfer completion.
                     api_went_away = True
-                    self._set_install_progress(90)
+                    self._installation_phase = "Waiting for bridge to reconnect and confirm version"
+                    self.async_write_ha_state()
                     _LOGGER.debug("RF Bridge has not returned from OTA yet: %s", err)
             await asyncio.sleep(1)
         verified = self._hub.status.get(CONF_SW_VERSION) == version
@@ -384,11 +425,26 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
         """Stage a release locally, then schedule its signed bridge fetch."""
         del backup, kwargs
         async with self._install_lock:
+            if self._maintenance_store is None:
+                raise HomeAssistantError("OTA maintenance storage is not ready")
+            # Persist before any device request so recovery can survive a reload.
+            self._maintenance_until = time.time() + 900
+            await self._maintenance_store.async_save({"until": self._maintenance_until})
             self._set_install_progress(0)
             try:
                 release = await _async_fetch_release(self.hass)
                 if version is not None and version != release.version:
                     raise HomeAssistantError("Requested RF Bridge firmware version is unavailable")
+                # A retry after a delayed reconnect must not reflash the same image.
+                status = await self._hub.async_probe_status()
+                if status.get(CONF_SW_VERSION) == release.version:
+                    self._release = release
+                    self._installation_phase = "Finished"
+                    self._set_install_progress(100)
+                    self._maintenance_until = 0.0
+                    await self._maintenance_store.async_save({"until": 0.0})
+                    await asyncio.sleep(1)
+                    return
                 device_key_id = self._hub.status.get("update_signing_key_id")
                 if not isinstance(device_key_id, str) or not device_key_id:
                     raise HomeAssistantError(
@@ -464,7 +520,7 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
                     if update_detail:
                         reason = f"{reason}: {'; '.join(update_detail)}"
                     _LOGGER.error(
-                        "RF Bridge firmware update failed: host=%s version=%s reason=%s",
+                        "RF Bridge firmware update not confirmed: host=%s version=%s reason=%s",
                         self._hub.host,
                         release.version,
                         reason,
@@ -478,9 +534,18 @@ class RFBridgeFirmwareUpdate(UpdateEntity):
                     release.version,
                 )
                 self._release = release
+                self._installation_phase = "Finished"
+                self._set_install_progress(100)
+                await asyncio.sleep(1)
+                self._maintenance_until = 0.0
+                await self._maintenance_store.async_save({"until": 0.0})
                 self.async_write_ha_state()
                 view.discard(token)
+            except BaseException:
+                self._installation_phase = "Update not confirmed; see logs"
+                raise
             finally:
+                await self._hub.async_resume_after_firmware_update()
                 self._clear_install_progress()
 
 

@@ -53,6 +53,9 @@ jobs:
           python tools/check_firmware_download_view.py
           python tools/check_ota_integration_lifecycle.py
           python tools/check_ota_update_progress.py
+          python tools/check_ota_retry_connection.py
+          python tools/check_update_availability_contract.py
+          python tools/check_learn_receipt_replay.py
           python tools/check_rf_bridge_entity_availability.py
           python tools/check_rf_bridge_websocket_reconnect.py
           python tools/check_rf_bridge_learn_filter.py
